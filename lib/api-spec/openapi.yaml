@@ -1,22 +1,22 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Lara Web API — Facebook multi-tool suite
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: fb
+    description: Facebook automation operations
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +24,127 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /fb/login:
+    post:
+      operationId: fbLogin
+      tags: [fb]
+      summary: Verify Facebook cookie and get profile info
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbLoginBody"
+      responses:
+        "200":
+          description: Profile info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbProfile"
+        "400":
+          description: Invalid cookie
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /fb/react:
+    post:
+      operationId: fbReact
+      tags: [fb]
+      summary: React to a Facebook post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbReactBody"
+      responses:
+        "200":
+          description: Reaction result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbActionResult"
+
+  /fb/share:
+    post:
+      operationId: fbShare
+      tags: [fb]
+      summary: Spam share a Facebook post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbShareBody"
+      responses:
+        "200":
+          description: Share results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbActionResult"
+
+  /fb/comment:
+    post:
+      operationId: fbComment
+      tags: [fb]
+      summary: Mass comment on a Facebook post
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbCommentBody"
+      responses:
+        "200":
+          description: Comment results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbActionResult"
+
+  /fb/token:
+    post:
+      operationId: fbGetToken
+      tags: [fb]
+      summary: Extract Facebook access token from cookie
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbLoginBody"
+      responses:
+        "200":
+          description: Access token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbTokenResult"
+
+  /fb/guard:
+    post:
+      operationId: fbGuard
+      tags: [fb]
+      summary: Enable or disable Facebook profile guard
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FbGuardBody"
+      responses:
+        "200":
+          description: Guard result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FbActionResult"
+
 components:
   schemas:
     HealthStatus:
@@ -31,6 +152,122 @@ components:
       properties:
         status:
           type: string
-      required:
-        - status
+      required: [status]
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+      required: [error, message]
+
+    FbLoginBody:
+      type: object
+      properties:
+        cookie:
+          type: string
+          description: Facebook cookie string (Netscape or raw format)
+      required: [cookie]
+
+    FbProfile:
+      type: object
+      properties:
+        uid:
+          type: string
+        name:
+          type: string
+        avatar:
+          type: string
+        fb_dtsg:
+          type: string
+        token:
+          type: string
+      required: [uid, name, avatar, fb_dtsg]
+
+    FbReactBody:
+      type: object
+      properties:
+        cookie:
+          type: string
+        postUrl:
+          type: string
+        reactionType:
+          type: string
+          enum: [LIKE, LOVE, HAHA, WOW, SAD, ANGRY, CARE]
+        count:
+          type: integer
+          default: 1
+      required: [cookie, postUrl, reactionType]
+
+    FbShareBody:
+      type: object
+      properties:
+        cookie:
+          type: string
+        postUrl:
+          type: string
+        count:
+          type: integer
+          default: 1
+        delay:
+          type: integer
+          default: 3
+          description: Delay in seconds between shares
+      required: [cookie, postUrl]
+
+    FbCommentBody:
+      type: object
+      properties:
+        cookie:
+          type: string
+        postUrl:
+          type: string
+        comments:
+          type: array
+          items:
+            type: string
+        count:
+          type: integer
+          default: 1
+        delay:
+          type: integer
+          default: 3
+      required: [cookie, postUrl, comments]
+
+    FbGuardBody:
+      type: object
+      properties:
+        cookie:
+          type: string
+        enable:
+          type: boolean
+          default: true
+      required: [cookie]
+
+    FbActionResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        count:
+          type: integer
+        message:
+          type: string
+        logs:
+          type: array
+          items:
+            type: string
+      required: [success, message]
+
+    FbTokenResult:
+      type: object
+      properties:
+        token:
+          type: string
+        uid:
+          type: string
+        expires:
+          type: string
+      required: [token, uid]

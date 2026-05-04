@@ -1,0 +1,206 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    name: Build Android APK (Universal — All Devices)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      EXPO_NO_TELEMETRY: 1
+      EXPO_PUBLIC_API_URL: https://rpw-boosterxd.onrender.com/api/fb
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Accept Android SDK licenses
+        run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --licenses || true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('artifacts/rpw-mobile/android/**/*.gradle*', 'artifacts/rpw-mobile/android/**/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Install workspace dependencies
+        run: pnpm install --no-frozen-lockfile --config.minimumReleaseAge=0
+
+      - name: Expo Prebuild
+        working-directory: artifacts/rpw-mobile
+        run: pnpm exec expo prebuild --platform android --no-install --clean
+
+      - name: Patch build.gradle (Universal APK + R8 minify + resource shrink)
+        working-directory: artifacts/rpw-mobile
+        run: |
+          python3 - << 'PYEOF'
+          import re
+
+          path = "android/app/build.gradle"
+          with open(path) as f:
+              c = f.read()
+
+          # Remove any existing splits block to replace cleanly
+          c = re.sub(r'\s*splits\s*\{[^}]*abi\s*\{[^}]*\}[^}]*\}', '', c, flags=re.DOTALL)
+
+          # Remove any conflicting ndk abiFilters block
+          c = re.sub(r'\s*ndk\s*\{[^}]*abiFilters[^}]*\}', '', c, flags=re.DOTALL)
+
+          # Add universal APK split — works on ALL Android devices
+          # arm64-v8a: modern phones (2016+)
+          # armeabi-v7a: older phones, budget devices
+          # x86_64: emulators and some tablets
+          # universalApk true = one APK file that installs on ANY device
+          splits_block = """
+              splits {
+                  abi {
+                      enable true
+                      reset()
+                      include "arm64-v8a", "armeabi-v7a", "x86_64"
+                      universalApk true
+                  }
+              }
+          """
+          c = c.replace("    buildTypes {", splits_block + "    buildTypes {", 1)
+
+          # Enable R8 minify for smaller APK
+          c = re.sub(r'minifyEnabled\s+false', 'minifyEnabled true', c)
+
+          # Enable resource shrinking for even smaller size
+          if 'shrinkResources' not in c:
+              c = re.sub(r'(minifyEnabled\s+true)', r'\1\n            shrinkResources true', c)
+          else:
+              c = re.sub(r'shrinkResources\s+false', 'shrinkResources true', c)
+
+          with open(path, "w") as f:
+              f.write(c)
+          print("Patched: Universal APK (arm64-v8a + armeabi-v7a + x86_64) + R8 + resource shrink")
+          PYEOF
+
+      - name: Add ProGuard rules (keep React Native + Expo)
+        working-directory: artifacts/rpw-mobile/android/app
+        run: |
+          cat >> proguard-rules.pro << 'EOF'
+          # React Native
+          -keep class com.facebook.react.** { *; }
+          -keep class com.facebook.hermes.** { *; }
+          -keep class com.facebook.jni.** { *; }
+          -keepclassmembers class * implements java.io.Serializable { *; }
+          # Expo
+          -keep class expo.** { *; }
+          -keep class host.exp.** { *; }
+          # Networking
+          -keep class okhttp3.** { *; }
+          -keep class okio.** { *; }
+          -dontwarn okhttp3.**
+          -dontwarn okio.**
+          -dontwarn java.lang.invoke.**
+          -dontwarn javax.annotation.**
+          EOF
+
+      - name: Make gradlew executable
+        run: chmod +x artifacts/rpw-mobile/android/gradlew
+
+      - name: Build Debug APK (Universal)
+        working-directory: artifacts/rpw-mobile/android
+        run: >
+          ./gradlew app:assembleDebug
+          --no-daemon
+          --build-cache
+          --parallel
+          -x lint
+          -x test
+          -x lintVitalRelease
+        env:
+          GRADLE_OPTS: >-
+            -Dorg.gradle.daemon=false
+            -Dorg.gradle.jvmargs=-Xmx4g
+            -XX:MaxMetaspaceSize=512m
+            -Dkotlin.incremental=false
+
+      - name: Find and rename universal APK
+        id: apk
+        run: |
+          UNIVERSAL=$(find artifacts/rpw-mobile/android/app/build/outputs/apk/debug -name "*universal*.apk" 2>/dev/null | head -1)
+          if [ -z "$UNIVERSAL" ]; then
+            UNIVERSAL=$(find artifacts/rpw-mobile/android/app/build/outputs/apk/debug -name "*.apk" | sort | tail -1)
+          fi
+          cp "$UNIVERSAL" "RPW-BOOSTER-v1.5.${{ github.run_number }}.apk"
+          SIZE=$(du -sh "$UNIVERSAL" | cut -f1)
+          echo "apk_path=RPW-BOOSTER-v1.5.${{ github.run_number }}.apk" >> $GITHUB_OUTPUT
+          echo "size=$SIZE" >> $GITHUB_OUTPUT
+          echo "APK size: $SIZE"
+          ls -lh artifacts/rpw-mobile/android/app/build/outputs/apk/debug/
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RPW-BOOSTER-v1.5.${{ github.run_number }}
+          path: RPW-BOOSTER-v1.5.${{ github.run_number }}.apk
+          retention-days: 90
+
+      - name: Create GitHub Release
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.5.${{ github.run_number }}
+          name: "RPW BOOSTER v1.5.${{ github.run_number }}"
+          body: |
+            ## RPW BOOSTER — Android APK (Universal, All Devices)
+
+            **Build:** #${{ github.run_number }} | **Arch:** Universal | **Size:** ${{ steps.apk.outputs.size }}
+            **API:** https://rpw-boosterxd.onrender.com
+
+            ### Works On ALL Android Devices
+            - Modern phones 2016+ (arm64-v8a)
+            - Older/budget phones (armeabi-v7a)
+            - Emulators & tablets (x86_64)
+            - Android 8.0+ (API 26+)
+
+            ### How To Install
+            1. Download `RPW-BOOSTER-v1.5.${{ github.run_number }}.apk` below
+            2. On your phone: **Settings → Security → Install unknown apps → Allow**
+            3. Open the APK file → tap Install → tap Open
+            4. Paste your Facebook cookie → tap Verify & Login
+            5. Start boosting!
+
+            ### Features
+            - **Auto React** — 7 reaction types, bulk boost with all saved accounts, 10-min cooldown, per-account dedup
+            - **Spam Share** — multi-share posts fast
+            - **Mass Comment** — comment with all saved accounts (max 20 at a time)
+            - **Access Token** — extract EAAG token from cookie
+            - **Profile Guard** — enable/disable Facebook profile shield
+
+            *Auto-built via GitHub Actions — installs on any Android device*
+          files: RPW-BOOSTER-v1.5.${{ github.run_number }}.apk
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

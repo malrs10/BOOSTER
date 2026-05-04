@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "buildCommand": "npm install -g pnpm@9 && pnpm install --no-frozen-lockfile --config.minimumReleaseAge=0 && pnpm --filter @workspace/lara-web run build",
+  "outputDirectory": "artifacts/lara-web/dist/public",
+  "installCommand": "echo 'Install handled in buildCommand'",
+  "framework": null,
+  "env": {
+    "BASE_PATH": "/"
+  },
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://rpw-booster-api.onrender.com/api/$1"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET,POST,PATCH,DELETE,OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "Content-Type" }
+      ]
+    }
+  ]
+}
