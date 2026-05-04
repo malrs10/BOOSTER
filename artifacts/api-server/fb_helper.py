@@ -1975,8 +1975,8 @@ def do_react_all(cookies: list, post_url: str, reaction: str) -> dict:
             uid = _uid_from_cookie(cookie)
             fb_dtsg, uid, access_token, authenticated, auth_html = _get_auth(cookie, acc_logs)
             if not authenticated or not fb_dtsg:
-                results.append({"uid": uid, "success": False, "name": f"UID {uid}"})
-                logs.append(f"[WARN] Account {uid}: not authenticated")
+                results.append({"uid": uid, "success": False, "name": f"UID {uid}", "dead": True})
+                logs.append(f"[DEAD] Account {uid}: cookie expired/invalid — will be auto-removed")
                 continue
 
             try:
@@ -2055,8 +2055,8 @@ def do_comment_all(cookies: list, post_url: str, comments: list, count: int) -> 
             uid = _uid_from_cookie(cookie)
             fb_dtsg, uid, _, authenticated, auth_html = _get_auth(cookie, [])
             if not authenticated:
-                results.append({"uid": uid, "success": False, "name": f"UID {uid}"})
-                logs.append(f"[WARN] Account {uid}: not authenticated")
+                results.append({"uid": uid, "success": False, "name": f"UID {uid}", "dead": True})
+                logs.append(f"[DEAD] Account {uid}: cookie expired/invalid — will be auto-removed")
                 continue
 
             try:

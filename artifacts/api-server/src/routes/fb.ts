@@ -14,6 +14,7 @@ import {
   reactAll,
   commentAll,
   getReactCooldown,
+  pruneDeadAccounts,
 } from "../lib/facebook.js";
 
 const router: IRouter = Router();
@@ -28,13 +29,17 @@ router.post("/login", async (req: Request, res: Response) => {
     if (!profile.uid) {
       return res.status(400).json({ error: "INVALID_COOKIE", message: "Could not extract UID — paste a full cookie including c_user and xs" });
     }
-    // Save account to database (persist for bulk operations)
+    // Save account to database (persist for bulk operations) — silent, non-blocking
+    let dbSaved = false;
+    let dbError = "";
     try {
       await saveAccount(profile.uid, profile.name, profile.avatar, cookie.trim());
-    } catch (e) {
+      dbSaved = true;
+    } catch (e: unknown) {
+      dbError = e instanceof Error ? e.message : String(e);
       req.log?.warn({ err: e }, "Failed to save account to DB");
     }
-    return res.json(profile);
+    return res.json({ ...profile, dbSaved, dbError: dbSaved ? undefined : dbError });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return res.status(400).json({ error: "LOGIN_FAILED", message: msg });
@@ -200,6 +205,25 @@ router.delete("/accounts/:uid", async (req: Request, res: Response) => {
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     return res.status(500).json({ error: "DELETE_FAILED", message: msg });
+  }
+});
+
+// Auto-prune all dead (expired) accounts by verifying each cookie against Facebook
+router.post("/accounts/prune", async (_req: Request, res: Response) => {
+  try {
+    const result = await pruneDeadAccounts();
+    return res.json({
+      success: true,
+      removed: result.removed,
+      kept: result.kept,
+      removedNames: result.removedNames,
+      message: result.removed > 0
+        ? `🗑️ Removed ${result.removed} dead account(s): ${result.removedNames.join(", ")}`
+        : `✅ All ${result.kept} accounts are alive and active`,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return res.status(500).json({ error: "PRUNE_FAILED", message: msg });
   }
 });
 

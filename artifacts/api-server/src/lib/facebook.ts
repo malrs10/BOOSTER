@@ -7,7 +7,7 @@ import { spawn } from "child_process";
 import path from "path";
 import { fileURLToPath } from "url";
 import { db, fbAccountsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HELPER_PATH = path.resolve(__dirname, "../fb_helper.py");
@@ -167,6 +167,7 @@ export async function guardEmail(email: string, password: string, enable: boolea
 // ── Database account management ───────────────────────────────────────────────
 
 export async function saveAccount(uid: string, name: string, avatar: string, cookie: string): Promise<void> {
+  if (!db) throw new Error("DATABASE_URL not configured — database unavailable");
   await db.insert(fbAccountsTable).values({ uid, name, avatar, cookie })
     .onConflictDoUpdate({
       target: fbAccountsTable.uid,
@@ -175,6 +176,7 @@ export async function saveAccount(uid: string, name: string, avatar: string, coo
 }
 
 export async function listAccounts(): Promise<FbAccount[]> {
+  if (!db) return [];
   return db.select({
     id: fbAccountsTable.id,
     uid: fbAccountsTable.uid,
@@ -187,26 +189,73 @@ export async function listAccounts(): Promise<FbAccount[]> {
 }
 
 export async function toggleAccount(uid: string, active: boolean): Promise<void> {
+  if (!db) return;
   await db.update(fbAccountsTable).set({ active }).where(eq(fbAccountsTable.uid, uid));
 }
 
 export async function deleteAccount(uid: string): Promise<void> {
+  if (!db) return;
   await db.delete(fbAccountsTable).where(eq(fbAccountsTable.uid, uid));
 }
 
+export async function deleteAccounts(uids: string[]): Promise<void> {
+  if (!db || !uids.length) return;
+  await db.delete(fbAccountsTable).where(inArray(fbAccountsTable.uid, uids));
+}
+
 export async function getActiveCookies(): Promise<string[]> {
+  if (!db) return [];
   const rows = await db.select({ cookie: fbAccountsTable.cookie })
     .from(fbAccountsTable)
     .where(eq(fbAccountsTable.active, true));
   return rows.map(r => r.cookie);
 }
 
+// ── Prune dead accounts — verify each cookie, remove expired ones ─────────────
+export async function pruneDeadAccounts(): Promise<{ removed: number; kept: number; removedNames: string[] }> {
+  if (!db) return { removed: 0, kept: 0, removedNames: [] };
+
+  const rows = await db.select({
+    uid: fbAccountsTable.uid,
+    name: fbAccountsTable.name,
+    cookie: fbAccountsTable.cookie,
+  }).from(fbAccountsTable);
+
+  if (!rows.length) return { removed: 0, kept: 0, removedNames: [] };
+
+  // Check each account by calling Python get_profile
+  const checks = await Promise.allSettled(
+    rows.map(async (row) => {
+      try {
+        const result = await callPython({ action: "login", cookie: row.cookie }) as { ok: boolean; authenticated?: boolean; uid?: string };
+        const alive = result.ok !== false && (result.authenticated === true || result.ok === true);
+        return { uid: row.uid, name: row.name, alive };
+      } catch {
+        return { uid: row.uid, name: row.name, alive: false };
+      }
+    })
+  );
+
+  const dead = checks
+    .map(r => r.status === "fulfilled" ? r.value : null)
+    .filter((r): r is { uid: string; name: string; alive: boolean } => r !== null && !r.alive);
+
+  if (dead.length) {
+    await deleteAccounts(dead.map(d => d.uid));
+  }
+
+  return {
+    removed: dead.length,
+    kept: rows.length - dead.length,
+    removedNames: dead.map(d => d.name || d.uid),
+  };
+}
+
 // ── Cooldown map: postUrl → last reactAll timestamp (10 min cooldown) ─────────
 const reactCooldownMap = new Map<string, number>();
 const REACT_COOLDOWN_MS = 10 * 60 * 1000; // 10 minutes
 
-// ── Per-account per-post reaction tracking (in-memory, survives restarts via reactAll skip logic) ──
-// Key: `${uid}::${postUrl}::${reactionType}` → timestamp
+// ── Per-account per-post reaction tracking ──────────────────────────────────
 const accountReactionLog = new Map<string, { reactionType: string; ts: number }>();
 
 export function logAccountReaction(uid: string, postUrl: string, reactionType: string): void {
@@ -232,7 +281,7 @@ const MAX_REACT_BATCH = 20;
 
 // ── Bulk operations using all saved accounts ──────────────────────────────────
 
-export async function reactAll(postUrl: string, reactionType: string): Promise<FbActionResult & { cooldown?: boolean; cooldownSec?: number }> {
+export async function reactAll(postUrl: string, reactionType: string): Promise<FbActionResult & { cooldown?: boolean; cooldownSec?: number; removedDead?: number }> {
   const cooldown = getReactCooldown(postUrl);
   if (cooldown.onCooldown) {
     return {
@@ -241,6 +290,16 @@ export async function reactAll(postUrl: string, reactionType: string): Promise<F
       cooldownSec: cooldown.remainingSec,
       message: `⏳ Cooldown active — wait ${cooldown.remainingSec}s before boosting this post again (10-min protection)`,
       logs: [`[WARN] Cooldown: ${cooldown.remainingSec}s remaining for this post`],
+      total: 0,
+      succeeded: 0,
+    };
+  }
+
+  if (!db) {
+    return {
+      success: false,
+      message: "❌ Database not connected — set DATABASE_URL environment variable",
+      logs: ["[ERROR] DATABASE_URL not set"],
       total: 0,
       succeeded: 0,
     };
@@ -264,12 +323,11 @@ export async function reactAll(postUrl: string, reactionType: string): Promise<F
   }
 
   // Filter: skip accounts that already reacted with the SAME reaction type
-  // If they reacted with a DIFFERENT type, include them so they change reaction
   const toReact = rows.filter(row => {
     const prev = getAccountReaction(row.uid, postUrl);
-    if (prev === null) return true;           // never reacted → include
-    if (prev !== reactionType) return true;   // different reaction → re-react
-    return false;                             // same reaction → skip
+    if (prev === null) return true;
+    if (prev !== reactionType) return true;
+    return false;
   });
 
   if (!toReact.length) {
@@ -302,14 +360,27 @@ export async function reactAll(postUrl: string, reactionType: string): Promise<F
   const cookies = batch.map(r => r.cookie);
   const result = await callPython({ action: "react_all", cookies, postUrl, reactionType }) as Record<string, unknown>;
 
-  // Log successful reactions per account
-  const results = (result.results as Array<{ uid?: string; success?: boolean }>) ?? [];
+  // Process per-account results
+  const results = (result.results as Array<{ uid?: string; success?: boolean; dead?: boolean }>) ?? [];
+
+  // Auto-remove dead accounts (expired/invalid cookies)
+  const deadUids: string[] = [];
   for (let i = 0; i < batch.length; i++) {
     const row = batch[i];
-    const res = results[i];
-    if (res?.success !== false) {
+    const res = results[i] ?? {};
+    const resUid = res.uid || row.uid;
+    if (res.dead === true) {
+      deadUids.push(resUid);
+    } else if (res.success !== false) {
       logAccountReaction(row.uid, postUrl, reactionType);
     }
+  }
+
+  if (deadUids.length > 0) {
+    try {
+      await deleteAccounts(deadUids);
+      logs.push(`[INFO] 🗑️ Auto-removed ${deadUids.length} dead/expired account(s) from saved list`);
+    } catch { /* silent */ }
   }
 
   return {
@@ -319,12 +390,27 @@ export async function reactAll(postUrl: string, reactionType: string): Promise<F
     succeeded: (result.succeeded as number) ?? 0,
     message: (result.message as string) ?? "",
     logs: [...logs, ...((result.logs as string[]) ?? [])],
+    removedDead: deadUids.length,
   };
 }
 
-export async function commentAll(postUrl: string, comments: string[], count: number): Promise<FbActionResult> {
-  const cookies = await getActiveCookies();
-  if (!cookies.length) {
+export async function commentAll(postUrl: string, comments: string[], count: number): Promise<FbActionResult & { removedDead?: number }> {
+  if (!db) {
+    return {
+      success: false,
+      message: "❌ Database not connected — set DATABASE_URL environment variable",
+      logs: ["[ERROR] DATABASE_URL not set"],
+      total: 0,
+      succeeded: 0,
+    };
+  }
+
+  const rows = await db.select({
+    cookie: fbAccountsTable.cookie,
+    uid: fbAccountsTable.uid,
+  }).from(fbAccountsTable).where(eq(fbAccountsTable.active, true));
+
+  if (!rows.length) {
     return {
       success: false,
       message: "No saved accounts found. Login first to save accounts.",
@@ -333,15 +419,38 @@ export async function commentAll(postUrl: string, comments: string[], count: num
       succeeded: 0,
     };
   }
+
   // Cap comment batch to 20 accounts max
-  const batch = cookies.slice(0, MAX_REACT_BATCH);
-  const result = await callPython({ action: "comment_all", cookies: batch, postUrl, comments, count }) as Record<string, unknown>;
+  const batch = rows.slice(0, MAX_REACT_BATCH);
+  const cookies = batch.map(r => r.cookie);
+  const result = await callPython({ action: "comment_all", cookies, postUrl, comments, count }) as Record<string, unknown>;
+
+  // Auto-remove dead accounts
+  const results = (result.results as Array<{ uid?: string; success?: boolean; dead?: boolean }>) ?? [];
+  const deadUids: string[] = [];
+  for (let i = 0; i < batch.length; i++) {
+    const row = batch[i];
+    const res = results[i] ?? {};
+    if (res.dead === true) {
+      deadUids.push(res.uid || row.uid);
+    }
+  }
+
+  const logs: string[] = (result.logs as string[]) ?? [];
+  if (deadUids.length > 0) {
+    try {
+      await deleteAccounts(deadUids);
+      logs.push(`[INFO] 🗑️ Auto-removed ${deadUids.length} dead/expired account(s) from saved list`);
+    } catch { /* silent */ }
+  }
+
   return {
     success: (result.success as boolean) ?? false,
     count: (result.succeeded as number) ?? 0,
     total: (result.total as number) ?? 0,
     succeeded: (result.succeeded as number) ?? 0,
     message: (result.message as string) ?? "",
-    logs: (result.logs as string[]) ?? [],
+    logs,
+    removedDead: deadUids.length,
   };
 }

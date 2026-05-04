@@ -29,6 +29,13 @@ async function patch<T>(path: string, body: unknown): Promise<T> {
   return data as T;
 }
 
+async function del<T>(path: string): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, { method: "DELETE" });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.message || data.error || `HTTP ${r.status}`);
+  return data as T;
+}
+
 export interface FbProfile {
   uid: string;
   name: string;
@@ -36,6 +43,8 @@ export interface FbProfile {
   fb_dtsg: string;
   token?: string;
   authenticated?: boolean;
+  dbSaved?: boolean;
+  dbError?: string;
 }
 
 export interface ActionResult {
@@ -47,6 +56,7 @@ export interface ActionResult {
   logs?: string[];
   cooldown?: boolean;
   cooldownSec?: number;
+  removedDead?: number;
 }
 
 export interface TokenResult {
@@ -64,6 +74,14 @@ export interface SavedAccount {
   active: boolean;
   lastUsed: string | null;
   createdAt: string;
+}
+
+export interface PruneResult {
+  success: boolean;
+  removed: number;
+  kept: number;
+  removedNames: string[];
+  message: string;
 }
 
 export const api = {
@@ -97,4 +115,10 @@ export const api = {
 
   toggleAccount: (uid: string, active: boolean) =>
     patch<{ success: boolean }>(`/accounts/${uid}`, { active }),
+
+  deleteAccount: (uid: string) =>
+    del<{ success: boolean }>(`/accounts/${uid}`),
+
+  pruneDeadAccounts: () =>
+    post<PruneResult>("/accounts/prune", {}),
 };

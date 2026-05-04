@@ -12,14 +12,7 @@ services:
       pnpm --filter @workspace/api-server run build &&
       mkdir -p artifacts/api-server/public &&
       cp -r artifacts/lara-web/dist/. artifacts/api-server/public/
-    startCommand: >
-      node -e "
-        const {execSync}=require('child_process');
-        try {
-          execSync('pnpm --filter @workspace/db run push', {stdio:'inherit', env:{...process.env, NODE_ENV:'production'}});
-        } catch(e) { console.warn('DB push failed (may already be up to date):', e.message); }
-      " &&
-      node --enable-source-maps artifacts/api-server/dist/index.mjs
+    startCommand: sh -c 'pnpm --filter @workspace/db run push 2>/dev/null || true; exec node --enable-source-maps artifacts/api-server/dist/index.mjs'
     healthCheckPath: /api/healthz
     envVars:
       - key: PORT

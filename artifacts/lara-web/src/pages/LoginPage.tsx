@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ThumbsUp, Share2, MessageSquare, Shield, LogIn, ChevronDown, ChevronUp, KeyRound, Zap } from "lucide-react";
+import { ThumbsUp, Share2, MessageSquare, Shield, LogIn, ChevronDown, ChevronUp, KeyRound, Zap, AlertTriangle } from "lucide-react";
 import { api, type FbProfile } from "@/lib/api";
 
 interface Props { onLogin: (profile: FbProfile, cookie: string) => void; }
@@ -29,6 +29,7 @@ export default function LoginPage({ onLogin }: Props) {
   const [cookie,    setCookie]    = useState("");
   const [loading,   setLoading]   = useState(false);
   const [error,     setError]     = useState("");
+  const [dbWarning, setDbWarning] = useState("");
   const [showGuide, setShowGuide] = useState(false);
 
   async function handleLogin() {
@@ -37,10 +38,13 @@ export default function LoginPage({ onLogin }: Props) {
     if (!c.includes("c_user") || !c.includes("xs")) {
       setError("Cookie must include c_user and xs fields."); return;
     }
-    setError(""); setLoading(true);
+    setError(""); setDbWarning(""); setLoading(true);
     try {
       const profile = await api.login(c);
       if (!profile.uid) { setError("Could not extract UID — paste the full cookie from facebook.com"); return; }
+      if (profile.dbSaved === false && profile.dbError) {
+        setDbWarning(`⚠️ Account not saved to server DB: ${profile.dbError}. It will work for this session but won't be used for bulk operations.`);
+      }
       onLogin(profile, c);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Login failed — check your cookie");
@@ -115,7 +119,7 @@ export default function LoginPage({ onLogin }: Props) {
             className="lara-input"
             rows={5}
             value={cookie}
-            onChange={e => { setCookie(e.target.value); setError(""); }}
+            onChange={e => { setCookie(e.target.value); setError(""); setDbWarning(""); }}
             placeholder={"Paste your Facebook cookie here...\n\nRequired: c_user + xs"}
             style={{ fontFamily: "monospace", fontSize: 11, lineHeight: 1.7 }}
           />
@@ -143,6 +147,13 @@ export default function LoginPage({ onLogin }: Props) {
             </div>
           )}
 
+          {dbWarning && (
+            <div style={{ marginTop: 10, padding: "10px 14px", background: "rgba(245,197,24,0.08)", border: "1px solid rgba(245,197,24,0.3)", borderRadius: "var(--radius-sm)", fontSize: 12, color: "var(--yellow, #f5c518)", display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
+              <span>{dbWarning}</span>
+            </div>
+          )}
+
           <button
             className="lara-btn lara-btn-primary"
             style={{ marginTop: 14, borderRadius: "var(--radius-sm)", fontSize: 16 }}
@@ -156,7 +167,7 @@ export default function LoginPage({ onLogin }: Props) {
           </button>
 
           <p style={{ color: "var(--text3)", fontSize: 11, marginTop: 10, textAlign: "center", lineHeight: 1.6 }}>
-            Cookie is used locally for boosting operations · No data shared externally
+            Cookie is saved to server DB for bulk boosting · Encrypted at rest
           </p>
         </div>
 

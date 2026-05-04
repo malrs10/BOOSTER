@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { ThumbsUp, Share2, MessageSquare, KeyRound, Shield, Users, ChevronRight, LogOut, Zap, Activity, Clock, TrendingUp } from "lucide-react";
+import { ThumbsUp, Share2, MessageSquare, KeyRound, Shield, Users, ChevronRight, LogOut, Zap, Activity, Clock, TrendingUp, Trash2, RefreshCw } from "lucide-react";
 import type { Profile, Tool } from "@/App";
 import { api } from "@/lib/api";
 
@@ -38,10 +38,43 @@ export default function PanelPage({ profile, onSelect, onLogout, accountCount }:
   const isAuth = profile.authenticated;
   const displayName = profile.name.startsWith("User ") ? `UID ${profile.uid}` : profile.name;
   const [accounts, setAccounts] = useState<{ uid: string; name: string; avatar: string; active: boolean }[]>([]);
+  const [pruning, setPruning] = useState(false);
+  const [pruneMsg, setPruneMsg] = useState("");
+  const [deleting, setDeleting] = useState<string | null>(null);
 
   useEffect(() => {
-    api.getAccounts().then(setAccounts).catch(() => {});
+    loadAccounts();
   }, []);
+
+  async function loadAccounts() {
+    try {
+      const accs = await api.getAccounts();
+      setAccounts(accs);
+    } catch { /* silent */ }
+  }
+
+  async function handlePrune() {
+    setPruning(true);
+    setPruneMsg("");
+    try {
+      const result = await api.pruneDeadAccounts();
+      setPruneMsg(result.message);
+      await loadAccounts();
+    } catch (e) {
+      setPruneMsg("❌ Prune failed — try again");
+    } finally {
+      setPruning(false);
+    }
+  }
+
+  async function handleDelete(uid: string) {
+    setDeleting(uid);
+    try {
+      await api.deleteAccount(uid);
+      setAccounts(prev => prev.filter(a => a.uid !== uid));
+    } catch { /* silent */ }
+    finally { setDeleting(null); }
+  }
 
   const activeCount = accounts.filter(a => a.active).length;
 
@@ -73,7 +106,7 @@ export default function PanelPage({ profile, onSelect, onLogout, accountCount }:
         <p style={{ fontSize: 12, color: "var(--text3)", marginBottom: 10, fontFamily: "monospace" }}>UID: {profile.uid}</p>
 
         {isAuth ? (
-          <span className="badge badge-success"><span className="dot dot-green dot-pulse" /> Authenticated</span>
+          <span className="badge badge-success"><span className="dot dot-green dot-pulse" /> Authenticated · Saved to DB</span>
         ) : (
           <span className="badge badge-warning"><span className="dot dot-yellow" /> Cookie Active</span>
         )}
@@ -87,29 +120,70 @@ export default function PanelPage({ profile, onSelect, onLogout, accountCount }:
         <StatCard label="Cooldown" value="10m"                                Icon={Clock}     color="#f5c518" />
       </div>
 
-      {/* ── Active accounts preview ── */}
+      {/* ── Saved accounts list ── */}
       {accounts.length > 0 && (
-        <div style={{ margin: "10px 12px 0", padding: "11px 14px", background: "rgba(24,119,242,0.07)", border: "1px solid rgba(24,119,242,0.2)", borderRadius: "var(--radius)" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ margin: "10px 12px 0", background: "var(--card)", border: "1px solid var(--border)", borderRadius: "var(--radius)", overflow: "hidden", boxShadow: "var(--shadow-card)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 14px", borderBottom: "1px solid var(--border)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <Users size={14} color="var(--primary)" />
-              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)" }}>{activeCount} Active Account{activeCount !== 1 ? "s" : ""}</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color: "var(--text)" }}>{activeCount} Active / {accounts.length} Saved</span>
             </div>
-            <span style={{ fontSize: 10, color: "var(--text3)" }}>Max 20 per batch</span>
+            <button
+              onClick={handlePrune}
+              disabled={pruning}
+              title="Remove expired/dead accounts automatically"
+              style={{
+                display: "flex", alignItems: "center", gap: 5,
+                fontSize: 11, fontWeight: 700, color: "#e41c2e",
+                background: "rgba(228,28,46,0.08)", border: "1px solid rgba(228,28,46,0.2)",
+                borderRadius: "var(--radius-sm)", padding: "4px 9px", cursor: pruning ? "wait" : "pointer",
+                fontFamily: "inherit", opacity: pruning ? 0.7 : 1,
+              }}
+            >
+              {pruning ? <><RefreshCw size={11} style={{ animation: "spin 1s linear infinite" }} /> Checking...</> : <><Trash2 size={11} /> Remove Dead</>}
+            </button>
           </div>
-          <div style={{ display: "flex" }}>
-            {accounts.filter(a => a.active).slice(0, 8).map((acc, i) => (
-              <div key={acc.uid} style={{ width: 26, height: 26, borderRadius: "50%", overflow: "hidden", border: "2px solid var(--card)", marginLeft: i === 0 ? 0 : -6, zIndex: 8 - i, background: "var(--bg3)" }}>
-                <img src={acc.avatar} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  onError={e => { (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${acc.name[0]}&background=1877F2&color=fff&size=26`; }} />
+
+          {pruneMsg && (
+            <div style={{ padding: "8px 14px", fontSize: 11, color: pruneMsg.startsWith("✅") ? "var(--green)" : "var(--red)", borderBottom: "1px solid var(--border)", background: pruneMsg.startsWith("✅") ? "rgba(66,183,42,0.06)" : "rgba(228,28,46,0.06)" }}>
+              {pruneMsg}
+            </div>
+          )}
+
+          <div style={{ maxHeight: 180, overflowY: "auto" }}>
+            {accounts.map((acc) => (
+              <div key={acc.uid} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 14px", borderBottom: "1px solid var(--border)" }}>
+                <img
+                  src={acc.avatar} alt=""
+                  style={{ width: 32, height: 32, borderRadius: "50%", objectFit: "cover", border: `2px solid ${acc.active ? "#42b72a" : "var(--border)"}`, flexShrink: 0 }}
+                  onError={e => { (e.target as HTMLImageElement).src = `https://ui-avatars.com/api/?name=${acc.name[0]}&background=1877F2&color=fff&size=32`; }}
+                />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{acc.name || `UID ${acc.uid}`}</div>
+                  <div style={{ fontSize: 10, color: "var(--text3)", fontFamily: "monospace" }}>{acc.uid}</div>
+                </div>
+                <span style={{ fontSize: 9, fontWeight: 700, color: acc.active ? "#42b72a" : "var(--text3)", background: acc.active ? "rgba(66,183,42,0.1)" : "var(--bg3)", padding: "2px 6px", borderRadius: 4 }}>
+                  {acc.active ? "ON" : "OFF"}
+                </span>
+                <button
+                  onClick={() => handleDelete(acc.uid)}
+                  disabled={deleting === acc.uid}
+                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text3)", padding: 4, lineHeight: 1, opacity: deleting === acc.uid ? 0.4 : 1 }}
+                  title="Remove account"
+                >
+                  <Trash2 size={13} />
+                </button>
               </div>
             ))}
-            {accounts.filter(a => a.active).length > 8 && (
-              <div style={{ width: 26, height: 26, borderRadius: "50%", background: "var(--primary)", border: "2px solid var(--card)", marginLeft: -6, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9, color: "#fff", fontWeight: 700 }}>
-                +{accounts.filter(a => a.active).length - 8}
-              </div>
-            )}
           </div>
+        </div>
+      )}
+
+      {accounts.length === 0 && (
+        <div style={{ margin: "10px 12px 0", padding: "14px", background: "rgba(24,119,242,0.06)", border: "1px solid rgba(24,119,242,0.18)", borderRadius: "var(--radius)", textAlign: "center" }}>
+          <Users size={20} color="var(--primary)" style={{ marginBottom: 6 }} />
+          <p style={{ fontSize: 12, color: "var(--text2)", margin: 0 }}>No saved accounts yet.</p>
+          <p style={{ fontSize: 11, color: "var(--text3)", marginTop: 4 }}>Login with more cookies to build your account pool for bulk boosting.</p>
         </div>
       )}
 
