@@ -35,7 +35,7 @@ jobs:
 
     env:
       EXPO_NO_TELEMETRY: 1
-      EXPO_PUBLIC_API_URL: https://rpw-booster-06fe.onrender.com/api/fb
+      EXPO_PUBLIC_API_URL: https://rpw-boost.onrender.com/
 
     steps:
       - name: Checkout repository
