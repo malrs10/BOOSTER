@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK + Deploy to Render
 
 on:
   push:
@@ -6,6 +6,27 @@ on:
   workflow_dispatch:
 
 jobs:
+  # ── Deploy API to Render ───────────────────────────────────────────────────
+  deploy-render:
+    name: Deploy API to Render
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Render deploy
+        if: env.RENDER_DEPLOY_HOOK != ''
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}")
+          echo "Render deploy triggered — HTTP $STATUS"
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+
+      - name: Skip deploy (no RENDER_DEPLOY_HOOK secret set)
+        if: env.RENDER_DEPLOY_HOOK == ''
+        run: echo "⚠️  RENDER_DEPLOY_HOOK secret not set — skipping Render deploy"
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+
+  # ── Build Universal Android APK ────────────────────────────────────────────
   build-apk:
     name: Build Android APK (Universal — All Devices)
     runs-on: ubuntu-latest
@@ -14,7 +35,7 @@ jobs:
 
     env:
       EXPO_NO_TELEMETRY: 1
-      EXPO_PUBLIC_API_URL: https://rpw-boosterxd.onrender.com/api/fb
+      EXPO_PUBLIC_API_URL: https://rpw-booster-06fe.onrender.com/api/fb
 
     steps:
       - name: Checkout repository
@@ -176,7 +197,7 @@ jobs:
             ## RPW BOOSTER — Android APK (Universal, All Devices)
 
             **Build:** #${{ github.run_number }} | **Arch:** Universal | **Size:** ${{ steps.apk.outputs.size }}
-            **API:** https://rpw-boosterxd.onrender.com
+            **API:** https://rpw-booster-06fe.onrender.com
 
             ### Works On ALL Android Devices
             - Modern phones 2016+ (arm64-v8a)
