@@ -4,7 +4,7 @@ services:
     env: node
     region: singapore
     plan: free
-    buildCommand: "npm install -g pnpm@9 && pnpm install --no-frozen-lockfile --config.minimumReleaseAge=0 && python3 -m pip install --break-system-packages curl-cffi requests && BASE_PATH=/ pnpm --filter @workspace/lara-web run build && pnpm --filter @workspace/api-server run build && mkdir -p artifacts/api-server/public && cp -r artifacts/lara-web/dist/. artifacts/api-server/public/"
+    buildCommand: "npm install -g pnpm@9 && pnpm install --no-frozen-lockfile --config.minimumReleaseAge=0 && python3 -m pip install --break-system-packages curl-cffi requests && BASE_PATH=/ pnpm --filter @workspace/lara-web run build && pnpm --filter @workspace/api-server run build && mkdir -p artifacts/api-server/public && cp -r artifacts/lara-web/dist/public/. artifacts/api-server/public/"
     startCommand: "node --enable-source-maps artifacts/api-server/dist/index.mjs"
     healthCheckPath: /api/healthz
     envVars:
@@ -12,7 +12,15 @@ services:
         value: 10000
       - key: NODE_ENV
         value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: rpw-booster-db
+          property: connectionString
       - key: SESSION_SECRET
         generateValue: true
 
-databases: []
+databases:
+  - name: rpw-booster-db
+    databaseName: rpwbooster
+    plan: free
+    region: singapore
